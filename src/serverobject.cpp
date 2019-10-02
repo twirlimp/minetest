@@ -21,20 +21,12 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <fstream>
 #include "inventory.h"
 #include "constants.h" // BS
+#include "log.h"
 
 ServerActiveObject::ServerActiveObject(ServerEnvironment *env, v3f pos):
 	ActiveObject(0),
-	m_known_by_count(0),
-	m_removed(false),
-	m_pending_deactivation(false),
-	m_static_exists(false),
-	m_static_block(1337,1337,1337),
 	m_env(env),
 	m_base_position(pos)
-{
-}
-
-ServerActiveObject::~ServerActiveObject()
 {
 }
 
@@ -76,26 +68,16 @@ float ServerActiveObject::getMinimumSavedMovement()
 	return 2.0*BS;
 }
 
-ItemStack ServerActiveObject::getWieldedItem() const
+ItemStack ServerActiveObject::getWieldedItem(ItemStack *selected, ItemStack *hand) const
 {
-	const Inventory *inv = getInventory();
-	if(inv)
-	{
-		const InventoryList *list = inv->getList(getWieldList());
-		if(list && (getWieldIndex() < (s32)list->getSize())) 
-			return list->getItem(getWieldIndex());
-	}
+	*selected = ItemStack();
+	if (hand)
+		*hand = ItemStack();
+
 	return ItemStack();
 }
 
 bool ServerActiveObject::setWieldedItem(const ItemStack &item)
 {
-	if(Inventory *inv = getInventory()) {
-		if (InventoryList *list = inv->getList(getWieldList())) {
-			list->changeItem(getWieldIndex(), item);
-			return true;
-		}
-	}
 	return false;
 }
-

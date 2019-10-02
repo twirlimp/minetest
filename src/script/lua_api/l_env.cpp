@@ -25,16 +25,23 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "lua_api/l_vmanip.h"
 #include "common/c_converter.h"
 #include "common/c_content.h"
-#include "scripting_game.h"
+#include <algorithm>
+#include "scripting_server.h"
 #include "environment.h"
+#include "mapblock.h"
 #include "server.h"
 #include "nodedef.h"
 #include "daynightratio.h"
 #include "util/pointedthing.h"
 #include "content_sao.h"
-#include "treegen.h"
+#include "mapgen/treegen.h"
 #include "emerge.h"
 #include "pathfinder.h"
+#include "face_position_cache.h"
+#include "remoteplayer.h"
+#ifndef SERVER
+#include "client/client.h"
+#endif
 
 struct EnumString ModApiEnvMod::es_ClearObjectsMode[] =
 {
@@ -49,7 +56,7 @@ struct EnumString ModApiEnvMod::es_ClearObjectsMode[] =
 void LuaABM::trigger(ServerEnvironment *env, v3s16 p, MapNode n,
 		u32 active_object_count, u32 active_object_count_wider)
 {
-	GameScripting *scriptIface = env->getScriptIface();
+	ServerScripting *scriptIface = env->getScriptIface();
 	scriptIface->realityCheck();
 
 	lua_State *L = scriptIface->getStack();
@@ -92,7 +99,7 @@ void LuaABM::trigger(ServerEnvironment *env, v3s16 p, MapNode n,
 
 void LuaLBM::trigger(ServerEnvironment *env, v3s16 p, MapNode n)
 {
-	GameScripting *scriptIface = env->getScriptIface();
+	ServerScripting *scriptIface = env->getScriptIface();
 	scriptIface->realityCheck();
 
 	lua_State *L = scriptIface->getStack();
@@ -130,12 +137,115 @@ void LuaLBM::trigger(ServerEnvironment *env, v3s16 p, MapNode n)
 	lua_pop(L, 1); // Pop error handler
 }
 
+int LuaRaycast::l_next(lua_State *L)
+{
+	MAP_LOCK_REQUIRED;
+
+	ScriptApiItem *script = getScriptApi<ScriptApiItem>(L);
+	GET_ENV_PTR;
+
+	LuaRaycast *o = checkobject(L, 1);
+	PointedThing pointed;
+	env->continueRaycast(&o->state, &pointed);
+	if (pointed.type == POINTEDTHING_NOTHING)
+		lua_pushnil(L);
+	else
+		script->pushPointedThing(pointed, true);
+
+	return 1;
+}
+
+int LuaRaycast::create_object(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	bool objects = true;
+	bool liquids = false;
+
+	v3f pos1 = checkFloatPos(L, 1);
+	v3f pos2 = checkFloatPos(L, 2);
+	if (lua_isboolean(L, 3)) {
+		objects = readParam<bool>(L, 3);
+	}
+	if (lua_isboolean(L, 4)) {
+		liquids = readParam<bool>(L, 4);
+	}
+
+	LuaRaycast *o = new LuaRaycast(core::line3d<f32>(pos1, pos2),
+		objects, liquids);
+
+	*(void **) (lua_newuserdata(L, sizeof(void *))) = o;
+	luaL_getmetatable(L, className);
+	lua_setmetatable(L, -2);
+	return 1;
+}
+
+LuaRaycast *LuaRaycast::checkobject(lua_State *L, int narg)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	luaL_checktype(L, narg, LUA_TUSERDATA);
+	void *ud = luaL_checkudata(L, narg, className);
+	if (!ud)
+		luaL_typerror(L, narg, className);
+	return *(LuaRaycast **) ud;
+}
+
+int LuaRaycast::gc_object(lua_State *L)
+{
+	LuaRaycast *o = *(LuaRaycast **) (lua_touserdata(L, 1));
+	delete o;
+	return 0;
+}
+
+void LuaRaycast::Register(lua_State *L)
+{
+	lua_newtable(L);
+	int methodtable = lua_gettop(L);
+	luaL_newmetatable(L, className);
+	int metatable = lua_gettop(L);
+
+	lua_pushliteral(L, "__metatable");
+	lua_pushvalue(L, methodtable);
+	lua_settable(L, metatable);
+
+	lua_pushliteral(L, "__index");
+	lua_pushvalue(L, methodtable);
+	lua_settable(L, metatable);
+
+	lua_pushliteral(L, "__gc");
+	lua_pushcfunction(L, gc_object);
+	lua_settable(L, metatable);
+
+	lua_pushliteral(L, "__call");
+	lua_pushcfunction(L, l_next);
+	lua_settable(L, metatable);
+
+	lua_pop(L, 1);
+
+	luaL_openlib(L, 0, methods, 0);
+	lua_pop(L, 1);
+
+	lua_register(L, className, create_object);
+}
+
+const char LuaRaycast::className[] = "Raycast";
+const luaL_Reg LuaRaycast::methods[] =
+{
+	luamethod(LuaRaycast, next),
+	{ 0, 0 }
+};
+
 void LuaEmergeAreaCallback(v3s16 blockpos, EmergeAction action, void *param)
 {
 	ScriptCallbackState *state = (ScriptCallbackState *)param;
 	assert(state != NULL);
 	assert(state->script != NULL);
 	assert(state->refcount > 0);
+
+	// state must be protected by envlock
+	Server *server = state->script->getServer();
+	MutexAutoLock envlock(server->m_env_mutex);
 
 	state->refcount--;
 
@@ -153,12 +263,45 @@ int ModApiEnvMod::l_set_node(lua_State *L)
 {
 	GET_ENV_PTR;
 
-	INodeDefManager *ndef = env->getGameDef()->ndef();
+	const NodeDefManager *ndef = env->getGameDef()->ndef();
 	// parameters
 	v3s16 pos = read_v3s16(L, 1);
 	MapNode n = readnode(L, 2, ndef);
 	// Do it
 	bool succeeded = env->setNode(pos, n);
+	lua_pushboolean(L, succeeded);
+	return 1;
+}
+
+// bulk_set_node([pos1, pos2, ...], node)
+// pos = {x=num, y=num, z=num}
+int ModApiEnvMod::l_bulk_set_node(lua_State *L)
+{
+	GET_ENV_PTR;
+
+	const NodeDefManager *ndef = env->getGameDef()->ndef();
+	// parameters
+	if (!lua_istable(L, 1)) {
+		return 0;
+	}
+
+	s32 len = lua_objlen(L, 1);
+	if (len == 0) {
+		lua_pushboolean(L, true);
+		return 1;
+	}
+
+	MapNode n = readnode(L, 2, ndef);
+
+	// Do it
+	bool succeeded = true;
+	for (s32 i = 1; i <= len; i++) {
+		lua_rawgeti(L, 1, i);
+		if (!env->setNode(read_v3s16(L, -1), n))
+			succeeded = false;
+		lua_pop(L, 1);
+	}
+
 	lua_pushboolean(L, succeeded);
 	return 1;
 }
@@ -188,7 +331,7 @@ int ModApiEnvMod::l_swap_node(lua_State *L)
 {
 	GET_ENV_PTR;
 
-	INodeDefManager *ndef = env->getGameDef()->ndef();
+	const NodeDefManager *ndef = env->getGameDef()->ndef();
 	// parameters
 	v3s16 pos = read_v3s16(L, 1);
 	MapNode n = readnode(L, 2, ndef);
@@ -207,7 +350,7 @@ int ModApiEnvMod::l_get_node(lua_State *L)
 	// pos
 	v3s16 pos = read_v3s16(L, 1);
 	// Do it
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	// Return node
 	pushnode(L, n, env->getGameDef()->ndef());
 	return 1;
@@ -223,7 +366,7 @@ int ModApiEnvMod::l_get_node_or_nil(lua_State *L)
 	v3s16 pos = read_v3s16(L, 1);
 	// Do it
 	bool pos_ok;
-	MapNode n = env->getMap().getNodeNoEx(pos, &pos_ok);
+	MapNode n = env->getMap().getNode(pos, &pos_ok);
 	if (pos_ok) {
 		// Return node
 		pushnode(L, n, env->getGameDef()->ndef());
@@ -249,9 +392,9 @@ int ModApiEnvMod::l_get_node_light(lua_State *L)
 	u32 dnr = time_to_daynight_ratio(time_of_day, true);
 
 	bool is_position_ok;
-	MapNode n = env->getMap().getNodeNoEx(pos, &is_position_ok);
+	MapNode n = env->getMap().getNode(pos, &is_position_ok);
 	if (is_position_ok) {
-		INodeDefManager *ndef = env->getGameDef()->ndef();
+		const NodeDefManager *ndef = env->getGameDef()->ndef();
 		lua_pushinteger(L, n.getLightBlend(dnr, ndef));
 	} else {
 		lua_pushnil(L);
@@ -267,28 +410,27 @@ int ModApiEnvMod::l_place_node(lua_State *L)
 
 	ScriptApiItem *scriptIfaceItem = getScriptApi<ScriptApiItem>(L);
 	Server *server = getServer(L);
-	INodeDefManager *ndef = server->ndef();
+	const NodeDefManager *ndef = server->ndef();
 	IItemDefManager *idef = server->idef();
 
 	v3s16 pos = read_v3s16(L, 1);
 	MapNode n = readnode(L, 2, ndef);
 
 	// Don't attempt to load non-loaded area as of now
-	MapNode n_old = env->getMap().getNodeNoEx(pos);
+	MapNode n_old = env->getMap().getNode(pos);
 	if(n_old.getContent() == CONTENT_IGNORE){
 		lua_pushboolean(L, false);
 		return 1;
 	}
 	// Create item to place
-	ItemStack item(ndef->get(n).name, 1, 0, "", idef);
+	ItemStack item(ndef->get(n).name, 1, 0, idef);
 	// Make pointed position
 	PointedThing pointed;
 	pointed.type = POINTEDTHING_NODE;
 	pointed.node_abovesurface = pos;
 	pointed.node_undersurface = pos + v3s16(0,-1,0);
-	// Place it with a NULL placer (appears in Lua as a non-functional
-	// ObjectRef)
-	bool success = scriptIfaceItem->item_OnPlace(item, NULL, pointed);
+	// Place it with a NULL placer (appears in Lua as nil)
+	bool success = scriptIfaceItem->item_OnPlace(item, nullptr, pointed);
 	lua_pushboolean(L, success);
 	return 1;
 }
@@ -304,7 +446,7 @@ int ModApiEnvMod::l_dig_node(lua_State *L)
 	v3s16 pos = read_v3s16(L, 1);
 
 	// Don't attempt to load non-loaded area as of now
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	if(n.getContent() == CONTENT_IGNORE){
 		lua_pushboolean(L, false);
 		return 1;
@@ -327,7 +469,7 @@ int ModApiEnvMod::l_punch_node(lua_State *L)
 	v3s16 pos = read_v3s16(L, 1);
 
 	// Don't attempt to load non-loaded area as of now
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	if(n.getContent() == CONTENT_IGNORE){
 		lua_pushboolean(L, false);
 		return 1;
@@ -343,10 +485,13 @@ int ModApiEnvMod::l_punch_node(lua_State *L)
 // pos = {x=num, y=num, z=num}
 int ModApiEnvMod::l_get_node_max_level(lua_State *L)
 {
-	GET_ENV_PTR;
+	Environment *env = getEnv(L);
+	if (!env) {
+		return 0;
+	}
 
 	v3s16 pos = read_v3s16(L, 1);
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	lua_pushnumber(L, n.getMaxLevel(env->getGameDef()->ndef()));
 	return 1;
 }
@@ -355,10 +500,13 @@ int ModApiEnvMod::l_get_node_max_level(lua_State *L)
 // pos = {x=num, y=num, z=num}
 int ModApiEnvMod::l_get_node_level(lua_State *L)
 {
-	GET_ENV_PTR;
+	Environment *env = getEnv(L);
+	if (!env) {
+		return 0;
+	}
 
 	v3s16 pos = read_v3s16(L, 1);
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	lua_pushnumber(L, n.getLevel(env->getGameDef()->ndef()));
 	return 1;
 }
@@ -374,7 +522,7 @@ int ModApiEnvMod::l_set_node_level(lua_State *L)
 	u8 level = 1;
 	if(lua_isnumber(L, 2))
 		level = lua_tonumber(L, 2);
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	lua_pushnumber(L, n.setLevel(env->getGameDef()->ndef(), level));
 	env->setNode(pos, n);
 	return 1;
@@ -391,7 +539,7 @@ int ModApiEnvMod::l_add_node_level(lua_State *L)
 	u8 level = 1;
 	if(lua_isnumber(L, 2))
 		level = lua_tonumber(L, 2);
-	MapNode n = env->getMap().getNodeNoEx(pos);
+	MapNode n = env->getMap().getNode(pos);
 	lua_pushnumber(L, n.addLevel(env->getGameDef()->ndef(), level));
 	env->setNode(pos, n);
 	return 1;
@@ -436,7 +584,7 @@ int ModApiEnvMod::l_get_node_timer(lua_State *L)
 	return 1;
 }
 
-// add_entity(pos, entityname) -> ObjectRef or nil
+// add_entity(pos, entityname, [staticdata]) -> ObjectRef or nil
 // pos = {x=num, y=num, z=num}
 int ModApiEnvMod::l_add_entity(lua_State *L)
 {
@@ -446,8 +594,10 @@ int ModApiEnvMod::l_add_entity(lua_State *L)
 	v3f pos = checkFloatPos(L, 1);
 	// content
 	const char *name = luaL_checkstring(L, 2);
+	// staticdata
+	const char *staticdata = luaL_optstring(L, 3, "");
 	// Do it
-	ServerActiveObject *obj = new LuaEntitySAO(env, pos, name, "");
+	ServerActiveObject *obj = new LuaEntitySAO(env, pos, name, staticdata);
 	int objectid = env->addActiveObject(obj);
 	// If failed to add, return nothing (reads as nil)
 	if(objectid == 0)
@@ -466,7 +616,7 @@ int ModApiEnvMod::l_add_item(lua_State *L)
 	// pos
 	//v3f pos = checkFloatPos(L, 1);
 	// item
-	ItemStack item = read_item(L, 2,getServer(L));
+	ItemStack item = read_item(L, 2,getServer(L)->idef());
 	if(item.empty() || !item.isKnown(getServer(L)->idef()))
 		return 0;
 
@@ -494,8 +644,8 @@ int ModApiEnvMod::l_get_player_by_name(lua_State *L)
 
 	// Do it
 	const char *name = luaL_checkstring(L, 1);
-	Player *player = env->getPlayer(name);
-	if(player == NULL){
+	RemotePlayer *player = dynamic_cast<RemotePlayer *>(env->getPlayer(name));
+	if (player == NULL){
 		lua_pushnil(L);
 		return 1;
 	}
@@ -516,17 +666,19 @@ int ModApiEnvMod::l_get_objects_inside_radius(lua_State *L)
 
 	// Do it
 	v3f pos = checkFloatPos(L, 1);
-	float radius = luaL_checknumber(L, 2) * BS;
+	float radius = readParam<float>(L, 2) * BS;
 	std::vector<u16> ids;
 	env->getObjectsInsideRadius(ids, pos, radius);
 	ScriptApiBase *script = getScriptApiBase(L);
 	lua_createtable(L, ids.size(), 0);
 	std::vector<u16>::const_iterator iter = ids.begin();
-	for(u32 i = 0; iter != ids.end(); iter++) {
+	for(u32 i = 0; iter != ids.end(); ++iter) {
 		ServerActiveObject *obj = env->getActiveObject(*iter);
-		// Insert object reference into table
-		script->objectrefGetOrCreate(L, obj);
-		lua_rawseti(L, -2, ++i);
+		if (!obj->isGone()) {
+			// Insert object reference into table
+			script->objectrefGetOrCreate(L, obj);
+			lua_rawseti(L, -2, ++i);
+		}
 	}
 	return 1;
 }
@@ -538,7 +690,7 @@ int ModApiEnvMod::l_set_timeofday(lua_State *L)
 	GET_ENV_PTR;
 
 	// Do it
-	float timeofday_f = luaL_checknumber(L, 1);
+	float timeofday_f = readParam<float>(L, 1);
 	sanity_check(timeofday_f >= 0.0 && timeofday_f <= 1.0);
 	int timeofday_mh = (int)(timeofday_f * 24000.0);
 	// This should be set directly in the environment but currently
@@ -552,11 +704,14 @@ int ModApiEnvMod::l_set_timeofday(lua_State *L)
 // get_timeofday() -> 0...1
 int ModApiEnvMod::l_get_timeofday(lua_State *L)
 {
-	GET_ENV_PTR;
+	Environment *env = getEnv(L);
+	if (!env) {
+		return 0;
+	}
 
 	// Do it
 	int timeofday_mh = env->getTimeOfDay();
-	float timeofday_f = (float)timeofday_mh / 24000.0;
+	float timeofday_f = (float)timeofday_mh / 24000.0f;
 	lua_pushnumber(L, timeofday_f);
 	return 1;
 }
@@ -564,7 +719,10 @@ int ModApiEnvMod::l_get_timeofday(lua_State *L)
 // get_day_count() -> int
 int ModApiEnvMod::l_get_day_count(lua_State *L)
 {
-	GET_ENV_PTR;
+	Environment *env = getEnv(L);
+	if (!env) {
+		return 0;
+	}
 
 	lua_pushnumber(L, env->getDayCount());
 	return 1;
@@ -581,37 +739,49 @@ int ModApiEnvMod::l_get_gametime(lua_State *L)
 }
 
 
-// find_node_near(pos, radius, nodenames) -> pos or nil
+// find_node_near(pos, radius, nodenames, search_center) -> pos or nil
 // nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
 int ModApiEnvMod::l_find_node_near(lua_State *L)
 {
-	GET_ENV_PTR;
+	Environment *env = getEnv(L);
+	if (!env) {
+		return 0;
+	}
 
-	INodeDefManager *ndef = getServer(L)->ndef();
+	const NodeDefManager *ndef = getGameDef(L)->ndef();
 	v3s16 pos = read_v3s16(L, 1);
 	int radius = luaL_checkinteger(L, 2);
-	std::set<content_t> filter;
-	if(lua_istable(L, 3)){
-		int table = 3;
+	std::vector<content_t> filter;
+	if (lua_istable(L, 3)) {
 		lua_pushnil(L);
-		while(lua_next(L, table) != 0){
+		while (lua_next(L, 3) != 0) {
 			// key at index -2 and value at index -1
 			luaL_checktype(L, -1, LUA_TSTRING);
-			ndef->getIds(lua_tostring(L, -1), filter);
+			ndef->getIds(readParam<std::string>(L, -1), filter);
 			// removes value, keeps key for next iteration
 			lua_pop(L, 1);
 		}
-	} else if(lua_isstring(L, 3)){
-		ndef->getIds(lua_tostring(L, 3), filter);
+	} else if (lua_isstring(L, 3)) {
+		ndef->getIds(readParam<std::string>(L, 3), filter);
 	}
 
-	for(int d=1; d<=radius; d++){
+	int start_radius = (lua_isboolean(L, 4) && readParam<bool>(L, 4)) ? 0 : 1;
+
+#ifndef SERVER
+	// Client API limitations
+	if (getClient(L) &&
+			getClient(L)->checkCSMRestrictionFlag(
+			CSMRestrictionFlags::CSM_RF_LOOKUP_NODES)) {
+		radius = std::max<int>(radius, getClient(L)->getCSMNodeRangeLimit());
+	}
+#endif
+
+	for (int d = start_radius; d <= radius; d++) {
 		std::vector<v3s16> list = FacePositionCache::getFacePositions(d);
-		for(std::vector<v3s16>::iterator i = list.begin();
-				i != list.end(); ++i){
-			v3s16 p = pos + (*i);
-			content_t c = env->getMap().getNodeNoEx(p).getContent();
-			if(filter.count(c) != 0){
+		for (const v3s16 &i : list) {
+			v3s16 p = pos + i;
+			content_t c = env->getMap().getNode(p).getContent();
+			if (CONTAINS(filter, c)) {
 				push_v3s16(L, p);
 				return 1;
 			}
@@ -626,44 +796,57 @@ int ModApiEnvMod::l_find_nodes_in_area(lua_State *L)
 {
 	GET_ENV_PTR;
 
-	INodeDefManager *ndef = getServer(L)->ndef();
+	const NodeDefManager *ndef = getServer(L)->ndef();
 	v3s16 minp = read_v3s16(L, 1);
 	v3s16 maxp = read_v3s16(L, 2);
-	std::set<content_t> filter;
-	if(lua_istable(L, 3)) {
-		int table = 3;
+	sortBoxVerticies(minp, maxp);
+
+	v3s16 cube = maxp - minp + 1;
+	// Volume limit equal to 8 default mapchunks, (80 * 2) ^ 3 = 4,096,000
+	if ((u64)cube.X * (u64)cube.Y * (u64)cube.Z > 4096000) {
+		luaL_error(L, "find_nodes_in_area(): area volume"
+				" exceeds allowed value of 4096000");
+		return 0;
+	}
+
+	std::vector<content_t> filter;
+	if (lua_istable(L, 3)) {
 		lua_pushnil(L);
-		while(lua_next(L, table) != 0) {
+		while (lua_next(L, 3) != 0) {
 			// key at index -2 and value at index -1
 			luaL_checktype(L, -1, LUA_TSTRING);
-			ndef->getIds(lua_tostring(L, -1), filter);
+			ndef->getIds(readParam<std::string>(L, -1), filter);
 			// removes value, keeps key for next iteration
 			lua_pop(L, 1);
 		}
-	} else if(lua_isstring(L, 3)) {
-		ndef->getIds(lua_tostring(L, 3), filter);
+	} else if (lua_isstring(L, 3)) {
+		ndef->getIds(readParam<std::string>(L, 3), filter);
 	}
 
-	std::map<content_t, u16> individual_count;
+	std::vector<u32> individual_count;
+	individual_count.resize(filter.size());
 
 	lua_newtable(L);
 	u64 i = 0;
 	for (s16 x = minp.X; x <= maxp.X; x++)
-		for (s16 y = minp.Y; y <= maxp.Y; y++)
-			for (s16 z = minp.Z; z <= maxp.Z; z++) {
-				v3s16 p(x, y, z);
-				content_t c = env->getMap().getNodeNoEx(p).getContent();
-				if (filter.count(c) != 0) {
-					push_v3s16(L, p);
-					lua_rawseti(L, -2, ++i);
-					individual_count[c]++;
-				}
+	for (s16 y = minp.Y; y <= maxp.Y; y++)
+	for (s16 z = minp.Z; z <= maxp.Z; z++) {
+		v3s16 p(x, y, z);
+		content_t c = env->getMap().getNode(p).getContent();
+
+		std::vector<content_t>::iterator it = std::find(filter.begin(), filter.end(), c);
+		if (it != filter.end()) {
+			push_v3s16(L, p);
+			lua_rawseti(L, -2, ++i);
+
+			u32 filt_index = it - filter.begin();
+			individual_count[filt_index]++;
+		}
 	}
 	lua_newtable(L);
-	for (std::set<content_t>::iterator it = filter.begin();
-			it != filter.end(); ++it) {
-		lua_pushnumber(L, individual_count[*it]);
-		lua_setfield(L, -2, ndef->get(*it).name.c_str());
+	for (u32 i = 0; i < filter.size(); i++) {
+		lua_pushnumber(L, individual_count[i]);
+		lua_setfield(L, -2, ndef->get(filter[i]).name.c_str());
 	}
 	return 2;
 }
@@ -681,23 +864,32 @@ int ModApiEnvMod::l_find_nodes_in_area_under_air(lua_State *L)
 
 	GET_ENV_PTR;
 
-	INodeDefManager *ndef = getServer(L)->ndef();
+	const NodeDefManager *ndef = getServer(L)->ndef();
 	v3s16 minp = read_v3s16(L, 1);
 	v3s16 maxp = read_v3s16(L, 2);
-	std::set<content_t> filter;
+	sortBoxVerticies(minp, maxp);
+
+	v3s16 cube = maxp - minp + 1;
+	// Volume limit equal to 8 default mapchunks, (80 * 2) ^ 3 = 4,096,000
+	if ((u64)cube.X * (u64)cube.Y * (u64)cube.Z > 4096000) {
+		luaL_error(L, "find_nodes_in_area_under_air(): area volume"
+				" exceeds allowed value of 4096000");
+		return 0;
+	}
+
+	std::vector<content_t> filter;
 
 	if (lua_istable(L, 3)) {
-		int table = 3;
 		lua_pushnil(L);
-		while(lua_next(L, table) != 0) {
+		while (lua_next(L, 3) != 0) {
 			// key at index -2 and value at index -1
 			luaL_checktype(L, -1, LUA_TSTRING);
-			ndef->getIds(lua_tostring(L, -1), filter);
+			ndef->getIds(readParam<std::string>(L, -1), filter);
 			// removes value, keeps key for next iteration
 			lua_pop(L, 1);
 		}
 	} else if (lua_isstring(L, 3)) {
-		ndef->getIds(lua_tostring(L, 3), filter);
+		ndef->getIds(readParam<std::string>(L, 3), filter);
 	}
 
 	lua_newtable(L);
@@ -706,12 +898,12 @@ int ModApiEnvMod::l_find_nodes_in_area_under_air(lua_State *L)
 	for (s16 z = minp.Z; z <= maxp.Z; z++) {
 		s16 y = minp.Y;
 		v3s16 p(x, y, z);
-		content_t c = env->getMap().getNodeNoEx(p).getContent();
+		content_t c = env->getMap().getNode(p).getContent();
 		for (; y <= maxp.Y; y++) {
 			v3s16 psurf(x, y + 1, z);
-			content_t csurf = env->getMap().getNodeNoEx(psurf).getContent();
-			if(c != CONTENT_AIR && csurf == CONTENT_AIR &&
-					filter.count(c) != 0) {
+			content_t csurf = env->getMap().getNode(psurf).getContent();
+			if (c != CONTENT_AIR && csurf == CONTENT_AIR &&
+					CONTAINS(filter, c)) {
 				push_v3s16(L, v3s16(x, y, z));
 				lua_rawseti(L, -2, ++i);
 			}
@@ -734,8 +926,8 @@ int ModApiEnvMod::l_get_perlin(lua_State *L)
 	} else {
 		params.seed    = luaL_checkint(L, 1);
 		params.octaves = luaL_checkint(L, 2);
-		params.persist = luaL_checknumber(L, 3);
-		params.spread  = v3f(1, 1, 1) * luaL_checknumber(L, 4);
+		params.persist = readParam<float>(L, 3);
+		params.spread  = v3f(1, 1, 1) * readParam<float>(L, 4);
 	}
 
 	params.seed += (int)env->getServerMap().getSeed();
@@ -790,7 +982,7 @@ int ModApiEnvMod::l_clear_objects(lua_State *L)
 {
 	GET_ENV_PTR;
 
-	ClearObjectsMode mode = CLEAR_OBJECTS_MODE_FULL;
+	ClearObjectsMode mode = CLEAR_OBJECTS_MODE_QUICK;
 	if (lua_istable(L, 1)) {
 		mode = (ClearObjectsMode)getenumfield(L, 1, "mode",
 			ModApiEnvMod::es_ClearObjectsMode, mode);
@@ -800,30 +992,83 @@ int ModApiEnvMod::l_clear_objects(lua_State *L)
 	return 0;
 }
 
-// line_of_sight(pos1, pos2, stepsize) -> true/false, pos
+// line_of_sight(pos1, pos2) -> true/false, pos
 int ModApiEnvMod::l_line_of_sight(lua_State *L)
 {
-	float stepsize = 1.0;
-
 	GET_ENV_PTR;
 
 	// read position 1 from lua
 	v3f pos1 = checkFloatPos(L, 1);
 	// read position 2 from lua
 	v3f pos2 = checkFloatPos(L, 2);
-	//read step size from lua
-	if (lua_isnumber(L, 3)) {
-		stepsize = lua_tonumber(L, 3);
-	}
 
 	v3s16 p;
-	bool success = env->line_of_sight(pos1, pos2, stepsize, &p);
+
+	bool success = env->line_of_sight(pos1, pos2, &p);
 	lua_pushboolean(L, success);
 	if (!success) {
 		push_v3s16(L, p);
 		return 2;
 	}
 	return 1;
+}
+
+// fix_light(p1, p2)
+int ModApiEnvMod::l_fix_light(lua_State *L)
+{
+	GET_ENV_PTR;
+
+	v3s16 blockpos1 = getContainerPos(read_v3s16(L, 1), MAP_BLOCKSIZE);
+	v3s16 blockpos2 = getContainerPos(read_v3s16(L, 2), MAP_BLOCKSIZE);
+	ServerMap &map = env->getServerMap();
+	std::map<v3s16, MapBlock *> modified_blocks;
+	bool success = true;
+	v3s16 blockpos;
+	for (blockpos.X = blockpos1.X; blockpos.X <= blockpos2.X; blockpos.X++)
+	for (blockpos.Y = blockpos1.Y; blockpos.Y <= blockpos2.Y; blockpos.Y++)
+	for (blockpos.Z = blockpos1.Z; blockpos.Z <= blockpos2.Z; blockpos.Z++) {
+		success = success & map.repairBlockLight(blockpos, &modified_blocks);
+	}
+	if (!modified_blocks.empty()) {
+		MapEditEvent event;
+		event.type = MEET_OTHER;
+		for (auto &modified_block : modified_blocks)
+			event.modified_blocks.insert(modified_block.first);
+
+		map.dispatchEvent(event);
+	}
+	lua_pushboolean(L, success);
+
+	return 1;
+}
+
+int ModApiEnvMod::l_raycast(lua_State *L)
+{
+	return LuaRaycast::create_object(L);
+}
+
+// load_area(p1, [p2])
+// load mapblocks in area p1..p2, but do not generate map
+int ModApiEnvMod::l_load_area(lua_State *L)
+{
+	GET_ENV_PTR;
+	MAP_LOCK_REQUIRED;
+
+	Map *map = &(env->getMap());
+	v3s16 bp1 = getNodeBlockPos(check_v3s16(L, 1));
+	if (!lua_istable(L, 2)) {
+		map->emergeBlock(bp1);
+	} else {
+		v3s16 bp2 = getNodeBlockPos(check_v3s16(L, 2));
+		sortBoxVerticies(bp1, bp2);
+		for (s16 z = bp1.Z; z <= bp2.Z; z++)
+		for (s16 y = bp1.Y; y <= bp2.Y; y++)
+		for (s16 x = bp1.X; x <= bp2.X; x++) {
+			map->emergeBlock(v3s16(x, y, z));
+		}
+	}
+
+	return 0;
 }
 
 // emerge_area(p1, p2, [callback, context])
@@ -899,7 +1144,7 @@ int ModApiEnvMod::l_delete_area(lua_State *L)
 		}
 	}
 
-	map.dispatchEvent(&event);
+	map.dispatchEvent(event);
 	lua_pushboolean(L, success);
 	return 1;
 }
@@ -929,15 +1174,13 @@ int ModApiEnvMod::l_find_path(lua_State *L)
 	std::vector<v3s16> path = get_path(env, pos1, pos2,
 		searchdistance, max_jump, max_drop, algo);
 
-	if (path.size() > 0)
-	{
+	if (!path.empty()) {
 		lua_newtable(L);
 		int top = lua_gettop(L);
 		unsigned int index = 1;
-		for (std::vector<v3s16>::iterator i = path.begin(); i != path.end();i++)
-		{
+		for (const v3s16 &i : path) {
 			lua_pushnumber(L,index);
-			push_v3s16(L, *i);
+			push_v3s16(L, i);
 			lua_settable(L, top);
 			index++;
 		}
@@ -956,7 +1199,7 @@ int ModApiEnvMod::l_spawn_tree(lua_State *L)
 
 	treegen::TreeDef tree_def;
 	std::string trunk,leaves,fruit;
-	INodeDefManager *ndef = env->getGameDef()->ndef();
+	const NodeDefManager *ndef = env->getGameDef()->ndef();
 
 	if(lua_istable(L, 2))
 	{
@@ -971,8 +1214,7 @@ int ModApiEnvMod::l_spawn_tree(lua_State *L)
 		tree_def.leavesnode=ndef->getId(leaves);
 		tree_def.leaves2_chance=0;
 		getstringfield(L, 2, "leaves2", leaves);
-		if (leaves !="")
-		{
+		if (!leaves.empty()) {
 			tree_def.leaves2node=ndef->getId(leaves);
 			getintfield(L, 2, "leaves2_chance", tree_def.leaves2_chance);
 		}
@@ -984,8 +1226,7 @@ int ModApiEnvMod::l_spawn_tree(lua_State *L)
 		getboolfield(L, 2, "thin_branches", tree_def.thin_branches);
 		tree_def.fruit_chance=0;
 		getstringfield(L, 2, "fruit", fruit);
-		if (fruit != "")
-		{
+		if (!fruit.empty()) {
 			tree_def.fruitnode=ndef->getId(fruit);
 			getintfield(L, 2, "fruit_chance",tree_def.fruit_chance);
 		}
@@ -1041,6 +1282,7 @@ int ModApiEnvMod::l_forceload_free_block(lua_State *L)
 void ModApiEnvMod::Initialize(lua_State *L, int top)
 {
 	API_FCT(set_node);
+	API_FCT(bulk_set_node);
 	API_FCT(add_node);
 	API_FCT(swap_node);
 	API_FCT(add_item);
@@ -1068,6 +1310,8 @@ void ModApiEnvMod::Initialize(lua_State *L, int top)
 	API_FCT(find_node_near);
 	API_FCT(find_nodes_in_area);
 	API_FCT(find_nodes_in_area_under_air);
+	API_FCT(fix_light);
+	API_FCT(load_area);
 	API_FCT(emerge_area);
 	API_FCT(delete_area);
 	API_FCT(get_perlin);
@@ -1077,7 +1321,17 @@ void ModApiEnvMod::Initialize(lua_State *L, int top)
 	API_FCT(spawn_tree);
 	API_FCT(find_path);
 	API_FCT(line_of_sight);
+	API_FCT(raycast);
 	API_FCT(transforming_liquid_add);
 	API_FCT(forceload_block);
 	API_FCT(forceload_free_block);
+}
+
+void ModApiEnvMod::InitializeClient(lua_State *L, int top)
+{
+	API_FCT(get_timeofday);
+	API_FCT(get_day_count);
+	API_FCT(get_node_max_level);
+	API_FCT(get_node_level);
+	API_FCT(find_node_near);
 }

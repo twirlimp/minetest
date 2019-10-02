@@ -186,6 +186,10 @@ local safe_env = {
 }
 
 function core.deserialize(str, safe)
+	if type(str) ~= "string" then
+		return nil, "Cannot deserialize type '"..type(str)
+			.."'. Argument must be a string."
+	end
 	if str:byte(1) == 0x1B then
 		return nil, "Bytecode prohibited"
 	end
@@ -214,4 +218,3 @@ test_in = {escape_chars="\n\r\t\v\\\"\'", non_european="θשׁ٩∂"}
 test_out = core.deserialize(core.serialize(test_in))
 assert(test_in.escape_chars == test_out.escape_chars)
 assert(test_in.non_european == test_out.non_european)
-

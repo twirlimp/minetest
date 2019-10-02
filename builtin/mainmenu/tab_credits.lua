@@ -19,82 +19,114 @@
 
 local core_developers = {
 	"Perttu Ahola (celeron55) <celeron55@gmail.com>",
-	"Ryan Kwolek (kwolekr) <kwolekr@minetest.net>",
-	"PilzAdam <pilzadam@minetest.net>",
 	"sfan5 <sfan5@live.de>",
-	"kahrl <kahrl@gmx.net>",
-	"sapier",
 	"ShadowNinja <shadowninja@minetest.net>",
 	"Nathanaël Courant (Nore/Ekdohibs) <nore@mesecons.net>",
 	"Loic Blot (nerzhul/nrz) <loic.blot@unix-experience.fr>",
-	"Matt Gregory (paramat)",
-	"est31 <MTest31@outlook.com>",
-	"Craig Robbins (Zeno)",
+	"paramat",
+	"Auke Kok (sofar) <sofar@foo-projects.org>",
+	"rubenwardy <rw@rubenwardy.com>",
+	"Krock/SmallJoker <mk939@ymail.com>",
+	"Lars Hofhansl <larsh@apache.org>",
 }
 
 local active_contributors = {
-	"Auke Kok (sofar) <sofar@foo-projects.org>",
-	"Duane Robertson <duane@duanerobertson.com>",
-	"SmallJoker <mk939@ymail.com>",
-	"Andrew Ward (rubenwardy) <rubenwardy@gmail.com>",
-	"Jeija <jeija@mesecons.net>",
-	"Gregory Currie (gregorycu)",
-	"Sokomine <wegwerf@anarres.dyndns.org>",
-	"TeTpaAka",
-	"Jean-Patrick G (kilbith) <jeanpatrick.guerrero@gmail.com>",
-	"Diego Martínez (kaeza) <kaeza@users.sf.net>",
+	"numberZero [Audiovisuals: meshgen]",
+	"stujones11 [Android UX improvements]",
+	"red-001 <red-001@outlook.ie> [CSM & Menu fixes]",
+	"Paul Ouellette (pauloue) [Docs, fixes]",
+	"Dániel Juhász (juhdanad) <juhdanad@gmail.com> [Audiovisuals: lighting]",
+	"Hybrid Dog [API]",
+	"srifqi [Android]",
+	"Vincent Glize (Dumbeldor) [Cleanups, CSM APIs]",
+	"Ben Deutsch [Rendering, Fixes, SQLite auth]",
+	"Wuzzy [Translation, Slippery]",
+	"ANAND (ClobberXD) [Docs, Fixes]",
+	"Shara/Ezhh [Docs, Game API]",
+	"DTA7 [Fixes, mute key]",
+	"Thomas-S [Disconnected, Formspecs]",
+	"Raymoo [Tool Capabilities]",
+	"Elijah Duffy (octacian) [Mainmenu]",
+	"noob3167 [Fixes]",
+	"adelcoding1 [Formspecs]",
+	"adrido [Windows Installer, Formspecs]",
+	"Rui [Sound Pitch]",
+	"Jean-Patrick G (kilbith) <jeanpatrick.guerrero@gmail.com> [Audiovisuals]",
+	"Esteban (EXio4) [Cleanups]",
+	"Vaughan Lapsley (vlapsley) [Carpathian mapgen]",
+	"CoderForTheBetter [Add set_rotation]",
+	"Quentin Bazin (Unarelith) [Cleanups]",
+	"Maksim (MoNTE48) [Android]",
+	"Gaël-de-Sailly [Mapgen, pitch fly]",
+	"zeuner [Docs, Fixes]",
+	"ThomasMonroe314 (tre) [Fixes]",
+	"Rob Blanckaert (basicer) [Fixes]",
+	"Jozef Behran (osjc) [Fixes]",
+	"random-geek [Fixes]",
+	"Pedro Gimeno (pgimeno) [Fixes]",
+	"lisacvuk [Fixes]",
 }
 
 local previous_core_developers = {
 	"BlockMen",
-	"Maciej Kasatkin (RealBadAngel) <maciej.kasatkin@o2.pl>",
+	"Maciej Kasatkin (RealBadAngel) [RIP]",
 	"Lisa Milne (darkrose) <lisa@ltmnet.com>",
 	"proller",
 	"Ilya Zhuravlev (xyz) <xyz@minetest.net>",
+	"PilzAdam <pilzadam@minetest.net>",
+	"est31 <MTest31@outlook.com>",
+	"kahrl <kahrl@gmx.net>",
+	"Ryan Kwolek (kwolekr) <kwolekr@minetest.net>",
+	"sapier",
+	"Zeno",
 }
 
 local previous_contributors = {
-	"Vanessa Ezekowitz (VanessaE) <vanessaezekowitz@gmail.com>",
-	"Jurgen Doser (doserj) <jurgen.doser@gmail.com>",
-	"MirceaKitsune <mirceakitsune@gmail.com>",
-	"dannydark <the_skeleton_of_a_child@yahoo.co.uk>",
-	"0gb.us <0gb.us@0gb.us>",
-	"Guiseppe Bilotta (Oblomov) <guiseppe.bilotta@gmail.com>",
-	"Jonathan Neuschafer <j.neuschaefer@gmx.net>",
-	"Nils Dagsson Moskopp (erlehmann) <nils@dieweltistgarnichtso.net>",
-	"Břetislav Štec (t0suj4/TBC_x)",
-	"Aaron Suen <warr1024@gmail.com>",
-	"Constantin Wenger (SpeedProg) <constantin.wenger@googlemail.com>",
-	"matttpt <matttpt@gmail.com>",
-	"JacobF <queatz@gmail.com>",
-	"TriBlade9 <triblade9@mail.com>",
-	"Zefram <zefram@fysh.org>",
+	"Gregory Currie (gregorycu) [optimisation]",
+	"Diego Martínez (kaeza) <kaeza@users.sf.net>",
+	"T4im [Profiler]",
+	"TeTpaAka [Hand overriding, nametag colors]",
+	"Duane Robertson <duane@duanerobertson.com> [MGValleys]",
+	"neoascetic [OS X Fixes]",
+	"TriBlade9 <triblade9@mail.com> [Audiovisuals]",
+	"Jurgen Doser (doserj) <jurgen.doser@gmail.com> [Fixes]",
+	"MirceaKitsune <mirceakitsune@gmail.com> [Audiovisuals]",
+	"Guiseppe Bilotta (Oblomov) <guiseppe.bilotta@gmail.com> [Fixes]",
+	"matttpt <matttpt@gmail.com> [Fixes]",
+	"Nils Dagsson Moskopp (erlehmann) <nils@dieweltistgarnichtso.net> [Minetest Logo]",
+	"Jeija <jeija@mesecons.net> [HTTP, particles]",
+	"bigfoot547 [CSM]",
+	"Rogier <rogier777@gmail.com> [Fixes]",
 }
+
+local function buildCreditList(source)
+	local ret = {}
+	for i = 1, #source do
+		ret[i] = core.formspec_escape(source[i])
+	end
+	return table.concat(ret, ",,")
+end
 
 return {
 	name = "credits",
 	caption = fgettext("Credits"),
 	cbf_formspec = function(tabview, name, tabdata)
 		local logofile = defaulttexturedir .. "logo.png"
+		local version = core.get_version()
 		return "image[0.5,1;" .. core.formspec_escape(logofile) .. "]" ..
-			"label[0.5,3.2;Minetest " .. core.get_version() .. "]" ..
+			"label[0.5,3.2;" .. version.project .. " " .. version.string .. "]" ..
 			"label[0.5,3.5;http://minetest.net]" ..
 			"tablecolumns[color;text]" ..
 			"tableoptions[background=#00000000;highlight=#00000000;border=false]" ..
-			"table[3.5,-0.25;8.5,5.8;list_credits;" ..
-			"#FFFF00," .. "Dedication of the current release" .. ",," ..
-			"The 0.4.14 release is dedicated to the memory of" .. ",," ..
-			"Minetest developer Maciej Kasatkin (RealBadAngel)" .. ",," ..
-			"who died on March 24 2016." .. ",," ..
-			"Our thoughts are with his family and friends." .. ",,," ..
+			"table[3.5,-0.25;8.5,6.05;list_credits;" ..
 			"#FFFF00," .. fgettext("Core Developers") .. ",," ..
-			table.concat(core_developers, ",,") .. ",,," ..
+			buildCreditList(core_developers) .. ",,," ..
 			"#FFFF00," .. fgettext("Active Contributors") .. ",," ..
-			table.concat(active_contributors, ",,") .. ",,," ..
+			buildCreditList(active_contributors) .. ",,," ..
 			"#FFFF00," .. fgettext("Previous Core Developers") ..",," ..
-			table.concat(previous_core_developers, ",,") .. ",,," ..
+			buildCreditList(previous_core_developers) .. ",,," ..
 			"#FFFF00," .. fgettext("Previous Contributors") .. ",," ..
-			table.concat(previous_contributors, ",,") .. "," ..
+			buildCreditList(previous_contributors) .. "," ..
 			";1]"
 	end
 }

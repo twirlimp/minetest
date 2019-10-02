@@ -7,18 +7,13 @@
 #include "static_text.h"
 #ifdef _IRR_COMPILE_WITH_GUI_
 
-#include <vector>
-#include <string>
-#include <iostream>
-#include <IGUISkin.h>
-#include <IGUIEnvironment.h>
 #include <IGUIFont.h>
 #include <IVideoDriver.h>
 #include <rect.h>
 #include <SColor.h>
 
 #if USE_FREETYPE
-	#include "cguittfont/xCGUITTFont.h"
+	#include "CGUITTFont.h"
 #endif
 
 #include "util/string.h"
@@ -114,10 +109,22 @@ void StaticText::draw()
 						font->getDimension(cText.c_str()).Width;
 				}
 
-				irr::gui::CGUITTFont *tmp = static_cast<irr::gui::CGUITTFont*>(font);
-				tmp->draw(cText, frameRect,
-					OverrideColorEnabled ? OverrideColor : skin->getColor(isEnabled() ? EGDC_BUTTON_TEXT : EGDC_GRAY_TEXT),
-					HAlign == EGUIA_CENTER, VAlign == EGUIA_CENTER, (RestrainTextInside ? &AbsoluteClippingRect : NULL));
+#if USE_FREETYPE
+				if (font->getType() == irr::gui::EGFT_CUSTOM) {
+					irr::gui::CGUITTFont *tmp = static_cast<irr::gui::CGUITTFont*>(font);
+					tmp->draw(cText, frameRect,
+						OverrideColorEnabled ? OverrideColor :
+							skin->getColor(isEnabled() ? EGDC_BUTTON_TEXT : EGDC_GRAY_TEXT),
+						HAlign == EGUIA_CENTER, VAlign == EGUIA_CENTER,
+						(RestrainTextInside ? &AbsoluteClippingRect : NULL));
+				} else
+#endif
+				{
+					font->draw(Text.c_str(), frameRect,
+						skin->getColor(EGDC_BUTTON_TEXT),
+						HAlign == EGUIA_CENTER, VAlign == EGUIA_CENTER,
+						(RestrainTextInside ? &AbsoluteClippingRect : NULL));
+				}
 			}
 			else
 			{
@@ -145,18 +152,29 @@ void StaticText::draw()
 							font->getDimension(BrokenText[i].c_str()).Width;
 					}
 
-					//std::vector<irr::video::SColor> colors;
-					//std::wstring str;
 					EnrichedString str = BrokenText[i];
 
 					//str = colorizeText(BrokenText[i].c_str(), colors, previous_color);
 					//if (!colors.empty())
 					//	previous_color = colors[colors.size() - 1];
 
-					irr::gui::CGUITTFont *tmp = static_cast<irr::gui::CGUITTFont*>(font);
-					tmp->draw(str, r,
-						previous_color, // FIXME
-						HAlign == EGUIA_CENTER, false, (RestrainTextInside ? &AbsoluteClippingRect : NULL));
+#if USE_FREETYPE
+					if (font->getType() == irr::gui::EGFT_CUSTOM) {
+						irr::gui::CGUITTFont *tmp = static_cast<irr::gui::CGUITTFont*>(font);
+						tmp->draw(str,
+							r, previous_color, // FIXME
+							HAlign == EGUIA_CENTER, false,
+							(RestrainTextInside ? &AbsoluteClippingRect : NULL));
+					} else
+#endif
+					{
+						// Draw non-colored text
+						font->draw(str.c_str(),
+							r, skin->getColor(EGDC_BUTTON_TEXT),
+							HAlign == EGUIA_CENTER, false,
+							(RestrainTextInside ? &AbsoluteClippingRect : NULL));
+					}
+
 
 					r.LowerRightCorner.Y += height;
 					r.UpperLeftCorner.Y += height;
@@ -237,7 +255,6 @@ video::SColor StaticText::getBackgroundColor() const
 //! Checks if background drawing is enabled
 bool StaticText::isDrawBackgroundEnabled() const
 {
-	_IRR_IMPLEMENT_MANAGED_MARSHALLING_BUGFIX;
 	return Background;
 }
 
@@ -252,7 +269,6 @@ void StaticText::setDrawBorder(bool draw)
 //! Checks if border drawing is enabled
 bool StaticText::isDrawBorderEnabled() const
 {
-	_IRR_IMPLEMENT_MANAGED_MARSHALLING_BUGFIX;
 	return Border;
 }
 
@@ -296,7 +312,6 @@ void StaticText::enableOverrideColor(bool enable)
 
 bool StaticText::isOverrideColorEnabled() const
 {
-	_IRR_IMPLEMENT_MANAGED_MARSHALLING_BUGFIX;
 	return OverrideColorEnabled;
 }
 
@@ -312,7 +327,6 @@ void StaticText::setWordWrap(bool enable)
 
 bool StaticText::isWordWrapEnabled() const
 {
-	_IRR_IMPLEMENT_MANAGED_MARSHALLING_BUGFIX;
 	return WordWrap;
 }
 

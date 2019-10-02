@@ -19,4 +19,13 @@ core.EMERGE_FROM_DISK   = 3
 core.EMERGE_GENERATED   = 4
 
 -- constants.h
+-- Size of mapblocks in nodes
 core.MAP_BLOCKSIZE = 16
+-- Default maximal HP of a player
+core.PLAYER_MAX_HP_DEFAULT = 20
+-- Default maximal breath of a player
+core.PLAYER_MAX_BREATH_DEFAULT = 11
+
+-- light.h
+-- Maximum value for node 'light_source' parameter
+core.LIGHT_MAX = 14

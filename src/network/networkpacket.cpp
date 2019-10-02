@@ -18,18 +18,19 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 */
 
 #include "networkpacket.h"
-#include "debug.h"
-#include "exceptions.h"
+#include <sstream>
+#include "networkexceptions.h"
 #include "util/serialize.h"
+#include "networkprotocol.h"
 
-NetworkPacket::NetworkPacket(u16 command, u32 datasize, u16 peer_id):
-m_datasize(datasize), m_read_offset(0), m_command(command), m_peer_id(peer_id)
+NetworkPacket::NetworkPacket(u16 command, u32 datasize, session_t peer_id):
+m_datasize(datasize), m_command(command), m_peer_id(peer_id)
 {
 	m_data.resize(m_datasize);
 }
 
 NetworkPacket::NetworkPacket(u16 command, u32 datasize):
-m_datasize(datasize), m_read_offset(0), m_command(command), m_peer_id(0)
+m_datasize(datasize), m_command(command)
 {
 	m_data.resize(m_datasize);
 }
@@ -49,7 +50,7 @@ void NetworkPacket::checkReadOffset(u32 from_offset, u32 field_size)
 	}
 }
 
-void NetworkPacket::putRawPacket(u8 *data, u32 datasize, u16 peer_id)
+void NetworkPacket::putRawPacket(u8 *data, u32 datasize, session_t peer_id)
 {
 	// If a m_command is already set, we are rewriting on same packet
 	// This is not permitted
@@ -58,12 +59,14 @@ void NetworkPacket::putRawPacket(u8 *data, u32 datasize, u16 peer_id)
 	m_datasize = datasize - 2;
 	m_peer_id = peer_id;
 
+	m_data.resize(m_datasize);
+
 	// split command and datas
 	m_command = readU16(&data[0]);
-	m_data = std::vector<u8>(&data[2], &data[2 + m_datasize]);
+	memcpy(m_data.data(), &data[2], m_datasize);
 }
 
-char* NetworkPacket::getString(u32 from_offset)
+const char* NetworkPacket::getString(u32 from_offset)
 {
 	checkReadOffset(from_offset, 0);
 
@@ -105,12 +108,13 @@ NetworkPacket& NetworkPacket::operator>>(std::string& dst)
 	return *this;
 }
 
-NetworkPacket& NetworkPacket::operator<<(std::string src)
+NetworkPacket& NetworkPacket::operator<<(const std::string &src)
 {
-	u16 msgsize = src.size();
-	if (msgsize > STRING_MAX_LEN) {
+	if (src.size() > STRING_MAX_LEN) {
 		throw PacketError("String too long");
 	}
+
+	u16 msgsize = src.size();
 
 	*this << msgsize;
 
@@ -119,12 +123,13 @@ NetworkPacket& NetworkPacket::operator<<(std::string src)
 	return *this;
 }
 
-void NetworkPacket::putLongString(std::string src)
+void NetworkPacket::putLongString(const std::string &src)
 {
-	u32 msgsize = src.size();
-	if (msgsize > LONG_STRING_MAX_LEN) {
+	if (src.size() > LONG_STRING_MAX_LEN) {
 		throw PacketError("String too long");
 	}
+
+	u32 msgsize = src.size();
 
 	*this << msgsize;
 
@@ -155,12 +160,13 @@ NetworkPacket& NetworkPacket::operator>>(std::wstring& dst)
 	return *this;
 }
 
-NetworkPacket& NetworkPacket::operator<<(std::wstring src)
+NetworkPacket& NetworkPacket::operator<<(const std::wstring &src)
 {
-	u16 msgsize = src.size();
-	if (msgsize > WIDE_STRING_MAX_LEN) {
+	if (src.size() > WIDE_STRING_MAX_LEN) {
 		throw PacketError("String too long");
 	}
+
+	u16 msgsize = src.size();
 
 	*this << msgsize;
 
@@ -279,7 +285,7 @@ NetworkPacket& NetworkPacket::operator<<(float src)
 {
 	checkDataSize(4);
 
-	writeF1000(&m_data[m_read_offset], src);
+	writeF32(&m_data[m_read_offset], src);
 
 	m_read_offset += 4;
 	return *this;
@@ -364,7 +370,7 @@ NetworkPacket& NetworkPacket::operator>>(float& dst)
 {
 	checkReadOffset(m_read_offset, 4);
 
-	dst = readF1000(&m_data[m_read_offset]);
+	dst = readF32(&m_data[m_read_offset]);
 
 	m_read_offset += 4;
 	return *this;
@@ -374,7 +380,7 @@ NetworkPacket& NetworkPacket::operator>>(v2f& dst)
 {
 	checkReadOffset(m_read_offset, 8);
 
-	dst = readV2F1000(&m_data[m_read_offset]);
+	dst = readV2F32(&m_data[m_read_offset]);
 
 	m_read_offset += 8;
 	return *this;
@@ -384,7 +390,7 @@ NetworkPacket& NetworkPacket::operator>>(v3f& dst)
 {
 	checkReadOffset(m_read_offset, 12);
 
-	dst = readV3F1000(&m_data[m_read_offset]);
+	dst = readV3F32(&m_data[m_read_offset]);
 
 	m_read_offset += 12;
 	return *this;
@@ -510,9 +516,9 @@ NetworkPacket& NetworkPacket::operator<<(video::SColor src)
 	return *this;
 }
 
-Buffer<u8> NetworkPacket::oldForgePacket()
+SharedBuffer<u8> NetworkPacket::oldForgePacket()
 {
-	Buffer<u8> sb(m_datasize + 2);
+	SharedBuffer<u8> sb(m_datasize + 2);
 	writeU16(&sb[0], m_command);
 
 	u8* datas = getU8Ptr(0);
