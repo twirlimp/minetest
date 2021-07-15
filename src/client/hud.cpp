@@ -45,11 +45,10 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #define OBJECT_CROSSHAIR_LINE_SIZE 8
 #define CROSSHAIR_LINE_SIZE 10
 
-Hud::Hud(gui::IGUIEnvironment *guienv, Client *client, LocalPlayer *player,
+Hud::Hud(Client *client, LocalPlayer *player,
 		Inventory *inventory)
 {
 	driver            = RenderingEngine::get_video_driver();
-	this->guienv      = guienv;
 	this->client      = client;
 	this->player      = player;
 	this->inventory   = inventory;
@@ -315,7 +314,7 @@ bool Hud::calculateScreenPos(const v3s16 &camera_offset, HudElement *e, v2s32 *p
 {
 	v3f w_pos = e->world_pos * BS;
 	scene::ICameraSceneNode* camera =
-		RenderingEngine::get_scene_manager()->getActiveCamera();
+		client->getSceneManager()->getActiveCamera();
 	w_pos -= intToFloat(camera_offset, BS);
 	core::matrix4 trans = camera->getProjectionMatrix();
 	trans *= camera->getViewMatrix();
@@ -475,7 +474,7 @@ void Hud::drawLuaElements(const v3s16 &camera_offset)
 
 				// Angle according to camera view
 				v3f fore(0.f, 0.f, 1.f);
-				scene::ICameraSceneNode *cam = RenderingEngine::get_scene_manager()->getActiveCamera();
+				scene::ICameraSceneNode *cam = client->getSceneManager()->getActiveCamera();
 				cam->getAbsoluteTransformation().rotateVect(fore);
 				int angle = - fore.getHorizontalAngle().Y;
 
@@ -747,7 +746,7 @@ void Hud::drawHotbar(u16 playeritem) {
 	s32 width = hotbar_itemcount * (m_hotbar_imagesize + m_padding * 2);
 	v2s32 pos = centerlowerpos - v2s32(width / 2, m_hotbar_imagesize + m_padding * 3);
 
-	const v2u32 &window_size = RenderingEngine::get_instance()->getWindowSize();
+	const v2u32 &window_size = RenderingEngine::getWindowSize();
 	if ((float) width / (float) window_size.X <=
 			g_settings->getFloat("hud_hotbar_max_width")) {
 		if (player->hud_flags & HUD_FLAG_HOTBAR_VISIBLE) {
@@ -871,10 +870,15 @@ void Hud::toggleBlockBounds()
 	}
 }
 
+void Hud::disableBlockBounds()
+{
+	m_block_bounds_mode = BLOCK_BOUNDS_OFF;
+}
+
 void Hud::drawBlockBounds()
 {
 	if (m_block_bounds_mode == BLOCK_BOUNDS_OFF) {
-		return;	
+		return;
 	}
 
 	video::SMaterial old_material = driver->getMaterial2D();
@@ -956,7 +960,7 @@ void Hud::updateSelectionMesh(const v3s16 &camera_offset)
 }
 
 void Hud::resizeHotbar() {
-	const v2u32 &window_size = RenderingEngine::get_instance()->getWindowSize();
+	const v2u32 &window_size = RenderingEngine::getWindowSize();
 
 	if (m_screensize != window_size) {
 		m_hotbar_imagesize = floor(HOTBAR_IMAGE_SIZE *
@@ -997,6 +1001,8 @@ void drawItemStack(
 		g_settings->getBool("inventory_items_animations");
 
 	const ItemDefinition &def = item.getDefinition(client->idef());
+
+	bool draw_overlay = false;
 
 	// Render as mesh if animated or no inventory image
 	if ((enable_animations && rotation_kind < IT_ROT_NONE) || def.inventory_image.empty()) {
@@ -1090,6 +1096,8 @@ void drawItemStack(
 		driver->setTransform(video::ETS_VIEW, oldViewMat);
 		driver->setTransform(video::ETS_PROJECTION, oldProjMat);
 		driver->setViewPort(oldViewPort);
+
+		draw_overlay = def.type == ITEM_NODE && def.inventory_image.empty();
 	} else { // Otherwise just draw as 2D
 		video::ITexture *texture = client->idef()->getInventoryTexture(def.name, client);
 		if (!texture)
@@ -1101,11 +1109,12 @@ void drawItemStack(
 		draw2DImageFilterScaled(driver, texture, rect,
 			core::rect<s32>({0, 0}, core::dimension2di(texture->getOriginalSize())),
 			clip, colors, true);
+
+		draw_overlay = true;
 	}
 
 	// draw the inventory_overlay
-	if (def.type == ITEM_NODE && def.inventory_image.empty() &&
-			!def.inventory_overlay.empty()) {
+	if (!def.inventory_overlay.empty() && draw_overlay) {
 		ITextureSource *tsrc = client->getTextureSource();
 		video::ITexture *overlay_texture = tsrc->getTexture(def.inventory_overlay);
 		core::dimension2d<u32> dimens = overlay_texture->getOriginalSize();
